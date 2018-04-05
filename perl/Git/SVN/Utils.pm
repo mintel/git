@@ -229,4 +229,18 @@ sub add_path_to_url {
 	return join '/', $url, $path;
 }
 
+=head3 uniq
+
+	my @array = qw(one two three two three);
+	my @filtered = uniq(@array);
+
+Return unique values from an array.
+
+=cut
+
+sub uniq {
+    my %seen;
+    grep !$seen{$_}++, @_;
+}
+
 1;

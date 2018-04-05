@@ -13,7 +13,6 @@ use IPC::Open3;
 use Memoize;  # core since 5.8.0, Jul 2002
 use POSIX qw(:signal_h);
 use Time::Local;
-use List::MoreUtils qw(uniq);
 
 use Git qw(
     command
@@ -30,6 +29,7 @@ use Git::SVN::Utils qw(
 	canonicalize_path
 	canonicalize_url
 	add_path_to_url
+	uniq
 );
 
 my $memo_backend;
