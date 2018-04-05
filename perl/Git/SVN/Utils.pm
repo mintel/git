@@ -14,6 +14,7 @@ our @EXPORT_OK = qw(
 	canonicalize_url
 	join_paths
 	add_path_to_url
+	uniq
 );
 
 
