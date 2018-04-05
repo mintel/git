@@ -13,6 +13,7 @@ use IPC::Open3;
 use Memoize;  # core since 5.8.0, Jul 2002
 use POSIX qw(:signal_h);
 use Time::Local;
+use List::MoreUtils qw(uniq);
 
 use Git qw(
     command
@@ -1567,7 +1568,7 @@ sub lookup_svn_merge {
 	# find the tip
 	for my $range ( @ranges ) {
 		if ($range =~ /[*]$/) {
-			warn "W: Ignoring partial merge in svn:mergeinfo "
+			warn "W: Ignoring partial merge in merge info "
 				."dirprop: $source:$range\n";
 			next;
 		}
@@ -1577,7 +1578,7 @@ sub lookup_svn_merge {
 		my $top_commit = $gs->find_rev_before( $top, 1, $bottom );
 
 		unless ($top_commit and $bottom_commit) {
-			warn "W: unknown path/rev in svn:mergeinfo "
+			warn "W: unknown path/rev in merge info "
 				."dirprop: $source:$range\n";
 			next;
 		}
@@ -1786,7 +1787,7 @@ sub parents_exclude {
 	return @excluded;
 }
 
-# Compute what's new in svn:mergeinfo.
+# Compute what's new in merge info.
 sub mergeinfo_changes {
 	my ($self, $old_path, $old_rev, $path, $rev, $mergeinfo_prop) = @_;
 	my %minfo = map {split ":", $_ } split "\n", $mergeinfo_prop;
@@ -1796,14 +1797,16 @@ sub mergeinfo_changes {
 	# Give up if $old_path isn't in the repo.
 	# This is probably a merge on a subtree.
 	if ($ra->check_path($old_path, $old_rev) != $SVN::Node::dir) {
-		warn "W: ignoring svn:mergeinfo on $old_path, ",
+		warn "W: ignoring merge info on $old_path, ",
 			"directory didn't exist in r$old_rev\n";
 		return {};
 	}
 	my (undef, undef, $props) = $ra->get_dir($old_path, $old_rev);
-	if (defined $props->{"svn:mergeinfo"}) {
+	if (defined $props->{"svn:mergeinfo"} || defined $props->{"svnmerge-integrated"}) {
 		my %omi = map {split ":", $_ } split "\n",
-			$props->{"svn:mergeinfo"};
+			merge_mergeinfo_props(
+				$props->{"svn:mergeinfo"},
+				$props->{"svnmerge-integrated"});
 		$old_minfo = \%omi;
 	}
 
@@ -1818,11 +1821,75 @@ sub mergeinfo_changes {
 		my $common_prefix = rindex $b, ",", $+[0] - 1;
 		$changes{$p} = substr $b, $common_prefix + 1;
 	}
-	print STDERR "Checking svn:mergeinfo changes since r$old_rev: ",
+	print STDERR "Checking merge info changes since r$old_rev: ",
 		scalar(keys %minfo), " sources, ",
 		scalar(keys %changes), " changed\n";
 
 	return \%changes;
+}
+
+# Merge the svn:mergeinfo and svnmerge-integrated SVN properties
+sub merge_mergeinfo_props {
+    my ($svnmerge, $svn_merge_py) = @_;
+	$svnmerge = $svnmerge || "";
+	$svn_merge_py = $svn_merge_py || "";
+    my %svnmerge_h = map {split ":", $_ } split "\n", $svnmerge;
+    my %svn_merge_py_h = map {split ":", $_ } split " ", $svn_merge_py;
+    my $output = "";
+    my @keys = ();
+    foreach my $key ( keys %svnmerge_h ) {
+        push @keys, $key;
+    }
+    foreach my $key ( keys %svn_merge_py_h ) {
+        push @keys, $key;
+    }
+    @keys = uniq @keys;
+    foreach my $key ( @keys ) {
+        my $commit_range;
+        if (exists $svnmerge_h{$key} && exists $svn_merge_py_h{$key}) {
+            $commit_range = merge_commit_ranges($svnmerge_h{$key}, $svn_merge_py_h{$key});
+        } elsif (exists $svnmerge_h{$key}) {
+            $commit_range = $svnmerge_h{$key};
+        } elsif (exists $svn_merge_py_h{$key}) {
+            $commit_range = $svn_merge_py_h{$key};
+        }
+		if (defined $commit_range) {
+			$output = $output.$key.":".$commit_range."\n";
+		}
+    }
+    $output =~ s/\n$//;
+    return $output;
+}
+
+sub merge_commit_ranges {
+    my ($left, $right) = @_;
+    my @ranges = ();
+    foreach my $range_str (split(/,/, $left), split(/,/, $right)) {
+        my @range = split(/-/, $range_str);
+        if (scalar(@range) == 1) {
+            push @range, $range[0];
+        }
+        push @ranges, [@range];
+    }
+    @ranges = sort { $a->[0] <=> $b->[0] } @ranges;
+    my @merged_ranges = ($ranges[0]);
+    for (my $i = 1; $i < scalar(@ranges); $i++) {
+        if ($merged_ranges[-1][1] < $ranges[$i][0]) {
+            push @merged_ranges, $ranges[$i];
+        } elsif ($merged_ranges[-1][1] < $ranges[$i][1]) {
+            $merged_ranges[-1][1] = $ranges[$i][1];
+        }
+    }
+    my $output = "";
+    foreach my $range (@merged_ranges) {
+        if ($range->[0] == $range->[1]) {
+            $output = $output.$range->[0].",";
+        } else {
+            $output = $output.$range->[0]."-".$range->[1].",";
+        }
+    }
+    $output =~ s/,$//;
+    return $output;
 }
 
 # note: this function should only be called if the various dirprops
@@ -1930,7 +1997,9 @@ sub make_log_entry {
 			$self->find_extra_svk_parents($tickets, \@parents);
 		}
 
-		my $mergeinfo_prop = $props->{"svn:mergeinfo"};
+		my $mergeinfo_prop = merge_mergeinfo_props(
+			$props->{"svn:mergeinfo"},
+			$props->{"svnmerge-integrated"});
 		if ($mergeinfo_prop) {
 			my $mi_changes = $self->mergeinfo_changes(
 						$parent_path,

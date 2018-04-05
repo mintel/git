@@ -742,7 +742,9 @@ sub populate_merge_info {
 			my $ra = Git::SVN::Ra->new($branchurl);
 			my (undef, undef, $props) =
 				$ra->get_dir(canonicalize_path("."), $svnrev);
-			my $par_mergeinfo = $props->{'svn:mergeinfo'};
+			my $par_mergeinfo = Git::SVN::merge_mergeinfo_props(
+					$props->{'svn:mergeinfo'},
+					$props->{'svnmerge-integrated'});
 			unless (defined $par_mergeinfo) {
 				$par_mergeinfo = '';
 			}
@@ -775,10 +777,10 @@ sub populate_merge_info {
 						 ."$d but does not have git-svn metadata. "
 						 ."This means git-svn cannot determine the "
 						 ."svn revision numbers to place into the "
-						 ."svn:mergeinfo property. You must ensure "
+						 ."svn:mergeinfo and svnmerge-integrated properties. You must ensure "
 						 ."a branch is entirely committed to "
 						 ."SVN before merging it in order for "
-						 ."svn:mergeinfo population to function "
+						 ."svn:mergeinfo/svnmerge-integrated population to function "
 						 ."properly";
 				}
 				push @revsin, $csvnrev;
